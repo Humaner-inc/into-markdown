@@ -1,0 +1,17 @@
+node_modules/
+.next/
+out/
+dist/
+tsconfig.tsbuildinfo
+*.log
+npm-debug.log*
+.env
+.env.*
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.turbo/
+.cache/
+coverage/
+playwright/.cache/
