@@ -7,7 +7,7 @@ npm install @humaner/into-markdown
 npx playwright install chromium
 ```
 
-## CLI : Render the .md summary into `/documentation`
+## CLI : Render the .md summary into `/documentation` - you must create the folder first
 
 ```bash
 npx @humaner/into-markdown https://example.com > documentation/site.md
@@ -58,4 +58,4 @@ npm run setup:browser   # to install Chromium
 
 ## License
 
-MIT
+MIT. Issues welcome; PRs aren't accepted for this kind of tool: see [`CONTRIBUTING.md`](./CONTRIBUTING.md).

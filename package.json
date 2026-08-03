@@ -1,11 +1,14 @@
 {
   "name": "@humaner/into-markdown",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Crawl a website. Get one clean markdown file for your agent knowledge source. No API key needed.",
   "type": "module",
   "license": "MIT",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "into-markdown": "./dist/cli.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

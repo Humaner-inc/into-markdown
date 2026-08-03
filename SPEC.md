@@ -1,7 +1,8 @@
 # Into Markdown — Package Spec
 
-This document defines the **public API contract** for `@humaner/into-markdown`.
-If your PR follows this spec, `npm run validate` and `npm run build` should pass.
+This document defines the **public API contract** for `@humaner/into-markdown` package.
+Maintainers: changes that follow this spec should pass `npm run validate` and
+`npm run build`.
 
 ---
 
@@ -11,6 +12,7 @@ If your PR follows this spec, `npm run validate` and `npm run build` should pass
 into-markdown/
 ├── src/                 # crawl library source
 │   ├── index.ts         # public exports
+│   ├── cli.ts           # npx / into-markdown binary
 │   ├── convert.ts       # convertSiteToMarkdown()
 │   ├── discover.ts
 │   ├── fetch-page.ts
@@ -23,14 +25,15 @@ into-markdown/
 │   ├── url.ts
 │   ├── rate-limit.ts
 │   └── types.ts
-├── eng/                 
+├── eng/
 │   ├── build.js
 │   └── validate.js
-└── dist/                
+└── dist/
 ```
 
-This repo is purely related to npm package and do not include any UI environment. 
-For CLI usage (`/documentation`) and optional self-hosted UI patterns, see [`README.md`](./README.md).
+This repo is the npm package only, no UI environment included, everything runs locally. 
+CLI binary: `into-markdown`
+(`npx @humaner/into-markdown`). Usage patterns: [`README.md`](./README.md).
 
 ---
 

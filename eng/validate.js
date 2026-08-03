@@ -9,6 +9,7 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 const REQUIRED = [
   "src/index.ts",
+  "src/cli.ts",
   "src/convert.ts",
   "src/types.ts",
   "src/discover.ts",
