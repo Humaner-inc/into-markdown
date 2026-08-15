@@ -33,7 +33,8 @@ const result = await convertSiteToMarkdown("https://example.com");
 3. If the HTML looks like a JS shell, render it in headless Chromium (Playwright)
 4. Strip site chrome (nav, footer, sidebar, cookies, CTAs)
 5. Convert to markdown (Turndown + GFM tables)
-6. Bucket by path and assemble one `.md` knowledge-base document
+6. Clean, split on headings, and cap sections (~900 chars) so the file is RAG-ready
+7. Bucket by path and assemble one `.md` knowledge-base document
 
 ## Limits
 

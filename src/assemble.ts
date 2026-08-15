@@ -1,4 +1,8 @@
 import { categoryAnchor } from "./categorize.js";
+import {
+  chunkMarkdown,
+  cleanMarkdownForChunking,
+} from "./chunk-markdown.js";
 import type { CrawledPage, PageCategory } from "./types.js";
 import { CATEGORY_ORDER } from "./types.js";
 import { hostnameFilename } from "./url.js";
@@ -28,6 +32,17 @@ function demoteHeadings(markdown: string, pageTitle: string): string {
       return `${"#".repeat(next)} ${match[2]}`;
     })
     .join("\n");
+}
+
+/** Clean, heading-split, and cap page bodies so the KB is RAG-ready. */
+function optimizePageMarkdown(markdown: string, pageTitle: string): string {
+  const cleaned = cleanMarkdownForChunking(markdown);
+  const demoted = demoteHeadings(cleaned, pageTitle);
+  const chunks = chunkMarkdown(demoted);
+  if (chunks.length === 0) {
+    return "";
+  }
+  return chunks.map((chunk) => chunk.content).join("\n\n");
 }
 
 export function assembleSiteMarkdown(params: {
@@ -89,7 +104,8 @@ export function assembleSiteMarkdown(params: {
       lines.push(`Source: ${page.url}`);
       lines.push("");
       if (page.markdown.trim()) {
-        lines.push(demoteHeadings(page.markdown, title));
+        const optimized = optimizePageMarkdown(page.markdown, title);
+        lines.push(optimized || "_No extractable content._");
       } else {
         lines.push("_No extractable content._");
       }
