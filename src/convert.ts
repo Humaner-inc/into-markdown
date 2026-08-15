@@ -100,7 +100,7 @@ export async function convertSiteToMarkdown(
 
     if (pages.length === 0) {
       throw new Error(
-        "No crawlable pages found. The site may block bots, or Chromium is not installed (run: npm run setup:browser).",
+        "No crawlable pages found. The site may block bots, or Chromium is not installed.",
       );
     }
 
