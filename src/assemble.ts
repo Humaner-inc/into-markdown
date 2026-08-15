@@ -38,7 +38,7 @@ function demoteHeadings(markdown: string, pageTitle: string): string {
 function optimizePageMarkdown(markdown: string, pageTitle: string): string {
   const cleaned = cleanMarkdownForChunking(markdown);
   const demoted = demoteHeadings(cleaned, pageTitle);
-  const chunks = chunkMarkdown(demoted);
+  const chunks = chunkMarkdown(demoted, { prefixHeadings: false });
   if (chunks.length === 0) {
     return "";
   }

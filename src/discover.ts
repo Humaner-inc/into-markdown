@@ -3,8 +3,38 @@ import { fetchText, loadPageHtml, mapPool } from "./fetch-page.js";
 import { BROWSER_CONCURRENCY, MAX_CRAWL_MS, MAX_CRAWL_PAGES } from "./types.js";
 import { normalizePageUrl, normalizeRootUrl, normalizeSitemapUrl } from "./url.js";
 
+/** Sitemap entries to read before ranking, so a subtree crawl can find its pages. */
+const SITEMAP_SCAN_LIMIT = 2_000;
+
 function originOf(url: URL): string {
   return `${url.protocol}//${url.host}`;
+}
+
+function pathPrefix(root: URL): string {
+  const path = root.pathname.replace(/\/+$/, "");
+  return path === "" ? "/" : path;
+}
+
+/** Crawling https://site.com/docs means the docs subtree, not the whole site. */
+function isUnderPrefix(url: string, prefix: string): boolean {
+  if (prefix === "/") return true;
+  try {
+    const path = new URL(url).pathname.replace(/\/+$/, "") || "/";
+    return path === prefix || path.startsWith(`${prefix}/`);
+  } catch {
+    return false;
+  }
+}
+
+function prefixFirst(urls: string[], prefix: string): string[] {
+  if (prefix === "/") return urls;
+  const inside: string[] = [];
+  const outside: string[] = [];
+  for (const url of urls) {
+    if (isUnderPrefix(url, prefix)) inside.push(url);
+    else outside.push(url);
+  }
+  return [...inside, ...outside];
 }
 
 function parseSitemapUrls(xml: string, base: URL): string[] {
@@ -76,6 +106,7 @@ export async function discoverUrls(
   const root = await normalizeRootUrl(inputUrl);
   const rootHref = root.href;
   const deadline = Date.now() + MAX_CRAWL_MS;
+  const prefix = pathPrefix(root);
 
   const ordered: string[] = [];
   const seen = new Set<string>();
@@ -88,8 +119,9 @@ export async function discoverUrls(
 
   enqueue(rootHref);
 
-  const fromSitemap = await collectFromSitemaps(root, limit);
-  for (const url of fromSitemap) {
+  const scanLimit = prefix === "/" ? limit : SITEMAP_SCAN_LIMIT;
+  const fromSitemap = await collectFromSitemaps(root, scanLimit);
+  for (const url of prefixFirst(fromSitemap, prefix)) {
     enqueue(url);
   }
 
@@ -106,14 +138,19 @@ export async function discoverUrls(
       loadPageHtml(url, { sameSiteAs: root }),
     );
 
+    const linked: string[] = [];
     for (const page of pages) {
       if (!page || Date.now() >= deadline) continue;
       const base = new URL(page.finalUrl);
       for (const href of extractLinks(page.html, base)) {
         const normalized = normalizePageUrl(href, root);
-        if (normalized) enqueue(normalized);
-        if (ordered.length >= limit) break;
+        if (normalized) linked.push(normalized);
       }
+    }
+
+    for (const url of prefixFirst(linked, prefix)) {
+      enqueue(url);
+      if (ordered.length >= limit) break;
     }
   }
 

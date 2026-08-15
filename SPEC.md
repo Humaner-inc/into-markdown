@@ -75,6 +75,15 @@ assembles everything into a single markdown file.
 - Same host only
 - Public pages only (SSRF guard in `public-url.ts`)
 
+### Documentation pages
+
+Code samples are kept on documentation pages and dropped elsewhere. A page
+counts as documentation when any of these is true:
+
+- Path contains `/docs`, `/help`, `/support`, `/guides`, `/api`, `/reference`, `/developers`, `/handbook`, or `/kb`
+- Host starts with `docs.`, `help.`, `support.`, `developers.`, `api.`, `guides.`, or `learn.` (e.g. `docs.markdown.io`, `help.acme.com`)
+- The crawl root itself is a documentation host or path — then every page in that crawl keeps code
+
 ---
 
 ## 3. Validation

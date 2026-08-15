@@ -1,6 +1,6 @@
 import { assembleSiteMarkdown } from "./assemble.js";
 import { closeBrowser } from "./browser-fetch.js";
-import { categorizeUrl } from "./categorize.js";
+import { categorizeUrl, isDocumentationUrl } from "./categorize.js";
 import { discoverUrls } from "./discover.js";
 import {
   clearPageCache,
@@ -76,10 +76,15 @@ export async function convertSiteToMarkdown(
       seenFinal.add(finalNormalized);
 
       const title = extractTitle(page.html, finalNormalized);
-      const markdown = htmlToMarkdown(page.html);
+      const category = categorizeUrl(finalNormalized, rootUrl);
+
+      // Docs examples answer real questions; code elsewhere is UI decoration.
+      const markdown = htmlToMarkdown(page.html, {
+        keepCode:
+          category === "Docs" || isDocumentationUrl(finalNormalized, rootUrl),
+      });
       if (!markdown || isContentlessMarkdown(markdown)) continue;
 
-      const category = categorizeUrl(finalNormalized, rootUrl);
       const pageBlurb = extractBlurb(page.html);
 
       if (category === "Home") {

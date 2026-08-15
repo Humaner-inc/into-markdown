@@ -95,6 +95,35 @@ const REMOVE_SELECTORS = [
   "[class*='CodeMirror']",
   "[data-id*='react-email']",
   "[data-id='__react-email-container']",
+  "[class*='sandbox']",
+  "[class*='Sandbox']",
+  "[class*='demo']",
+  "[class*='Demo']",
+];
+
+//Source samples and syntax highlighters > dropped unless the page is docs.
+const CODE_SELECTORS = [
+  "pre",
+  "samp",
+  "[class*='shiki']",
+  "[class*='prism']",
+  "[class*='hljs']",
+  "[class*='highlight-']",
+  "[class*='syntax']",
+  "[class*='code-block']",
+  "[class*='CodeBlock']",
+  "[class*='codeblock']",
+  "[class*='code-sample']",
+  "[class*='code-snippet']",
+  "[class*='snippet']",
+  "[class*='Snippet']",
+  "[class*='terminal']",
+  "[class*='Terminal']",
+  "[class*='console']",
+  "[data-language]",
+  "[data-lang]",
+  "[data-rehype-pretty-code-fragment]",
+  "[data-rehype-pretty-code-figure]",
 ];
 
 const BOILERPLATE_HEADING =
@@ -103,7 +132,42 @@ const BOILERPLATE_HEADING =
 const CTA_LINE =
   /^(get started|sign up( free)?|sign in|log in|login|contact( us| sales)?|book( a)? demo|request( a)? demo|try( it)?( for)? free|start( for)? free|learn more|read more|see( all| more| pricing| examples)?|view( all| more)?|download|subscribe|join( now| free)?|talk to (us|sales)|schedule a call|watch( the)? (demo|video)|check the docs|documentation|docs|pricing|home|features|blog|careers|about( us)?|privacy( policy)?|terms( of (service|use))?|cookie(s| policy)?|copy( to clipboard)?|copied!?)$/i;
 
-function createTurndown(): TurndownService {
+const DECORATIVE_ALT =
+  /\b(logo|icon|image|photo|picture|background|banner|hero|illustration|screenshot|graphic|pattern|gradient|texture|glow|ray|blur|decoration|decorative|mockup|thumbnail|avatar|placeholder|arrow|divider|shape)\b/i;
+
+// Alt text that describes chrome, not information an agent can answer with. 
+function isDecorativeAlt(alt: string): boolean {
+  const text = alt.trim();
+  if (!text) return true;
+  if (DECORATIVE_ALT.test(text)) return true;
+  // Two-word labels carry no fact unless they include a figure.
+  return text.split(/\s+/).length <= 3 && !/\d/.test(text);
+}
+
+const LANGUAGE_NAME = /^[a-z0-9+#]{1,12}$/i;
+
+// Reads attributes from either a cheerio node or a Turndown DOM node.
+function attributeOf(node: unknown, name: string): string {
+  if (!node) return "";
+  const el = node as {
+    attribs?: Record<string, string>;
+    getAttribute?: (n: string) => string | null;
+  };
+  return el.attribs?.[name] ?? el.getAttribute?.(name) ?? "";
+}
+
+function codeLanguage(node: unknown): string {
+  for (const name of ["data-language", "data-lang", "language", "lang"]) {
+    const value = attributeOf(node, name).trim();
+    if (LANGUAGE_NAME.test(value)) return value.toLowerCase();
+  }
+
+  const className = attributeOf(node, "class");
+  const match = className.match(/(?:^|\s)(?:lang|language)-([a-z0-9+#]{1,12})/i);
+  return match?.[1]?.toLowerCase() ?? "";
+}
+
+function createTurndown(keepCode: boolean): TurndownService {
   const turndown = new TurndownService({
     headingStyle: "atx",
     codeBlockStyle: "fenced",
@@ -115,6 +179,57 @@ function createTurndown(): TurndownService {
 
   turndown.use(turndownTables);
   turndown.remove(["script", "style", "noscript", "iframe"]);
+
+  if (keepCode) {
+    // Docs examples are knowledge: emit them as fenced blocks with a language.
+    turndown.addRule("fencedSourceBlocks", {
+      filter: "pre",
+      replacement(_content, node) {
+        const el = node as unknown as {
+          textContent?: string | null;
+          querySelector?: (s: string) => unknown;
+        };
+        const body = (el.textContent ?? "").replace(/\n{3,}/g, "\n\n").trim();
+        if (!body) return "";
+        const language = codeLanguage(node) || codeLanguage(el.querySelector?.("code"));
+        return `\n\n\`\`\`${language}\n${body}\n\`\`\`\n\n`;
+      },
+    });
+  } else {
+    turndown.remove(["pre"]);
+    turndown.addRule("dropSourceBlocks", {
+      filter(node) {
+        if (node.nodeName === "PRE") return true;
+        return (
+          node.nodeName === "CODE" &&
+          (node.parentNode?.nodeName === "PRE" ||
+            (node.textContent ?? "").includes("\n"))
+        );
+      },
+      replacement() {
+        return "";
+      },
+    });
+  }
+
+  // Inline code reads as prose either way; only block code needs a fence.
+  turndown.addRule("inlineCodeAsText", {
+    filter(node) {
+      return (
+        (node.nodeName === "CODE" ||
+          node.nodeName === "KBD" ||
+          node.nodeName === "SAMP") &&
+        node.parentNode?.nodeName !== "PRE"
+      );
+    },
+    replacement(content, node) {
+      const text = content.replace(/\r/g, "");
+      if (keepCode && text.includes("\n")) {
+        return `\n\n\`\`\`${codeLanguage(node)}\n${text.trim()}\n\`\`\`\n\n`;
+      }
+      return text.replace(/\s+/g, " ").trim();
+    },
+  });
 
   turndown.addRule("dropEmptyLinks", {
     filter(node) {
@@ -166,14 +281,8 @@ function createTurndown(): TurndownService {
         getAttribute?: (name: string) => string | null;
       };
       const alt = (el.getAttribute?.("alt") || "").trim();
-      if (
-        !alt ||
-        /^(logo|icon|image|photo|background|banner)\b/i.test(alt)
-      ) {
-        return "";
-      }
       // Keep descriptive alts as plain text (metrics captions, chart labels).
-      return alt;
+      return isDecorativeAlt(alt) ? "" : alt;
     },
   });
 
@@ -303,6 +412,65 @@ function removeBoilerplateSections($: cheerio.CheerioAPI): void {
 const LINE_NUMBER_SELECTORS =
   "[class*='line-number'], [class*='linenumber'], [class*='line-num'], [class*='cm-gutter']";
 
+const CODE_KEYWORD =
+  /^(import|export|const|let|var|function|class|interface|type|enum|return|await|async|public|private|def|require|package|if|else|for|while|switch|try|catch|throw|SELECT|INSERT|curl)\b/;
+
+const CODE_PUNCTUATION = /[;{}()=<>[\]]/;
+
+const CODE_OPERATOR = /=>|\(\)|\)\s*\{|\);|\};|\]\)|::|&&|\|\||===|!==|\+=/;
+
+/** True for a single line that reads as source code rather than prose. */
+function looksLikeCodeLine(line: string): boolean {
+  const text = line.trim();
+  if (!text) return false;
+  if (text.length > 400) return false;
+
+  if (CODE_KEYWORD.test(text) && CODE_PUNCTUATION.test(text)) return true;
+  // Structural punctuation only: `});`, `}`, `),`.
+  if (/^[{}[\]()<>;,.:]+$/.test(text)) return true;
+  if (/^<\/?[A-Za-z][\w:.-]*(\s[^<>]*)?\/?>[,;]?$/.test(text)) return true;
+  if (/^<\/?[A-Za-z][\w:.-]*\s+[\w:-]+=/.test(text)) return true;
+  // JSON payloads: `{ "id": "…" }` or `"key": value,`.
+  if (/^\{?\s*"[\w.$-]+"\s*:\s*.+[},]?$/.test(text)) return true;
+  if (/^[\w$][\w$.]*\s*[:=]\s*[^\s].*[;,]$/.test(text)) return true;
+  if (/^[\w$][\w$.]*\([^)]*\)\s*[;,]?$/.test(text) && /[;(]/.test(text)) {
+    return true;
+  }
+  if (/^[\w-]+=(["'{]|\$)/.test(text)) return true;
+  // Template interpolation left in a sample: `Hello {username},`.
+  if (/\{\s*[\w$.]+\s*\}/.test(text)) return true;
+  if (CODE_OPERATOR.test(text)) return true;
+  return false;
+}
+
+/** Gutter-numbered source viewers render one line per element: `12const x = 1`. */
+function stripLeadingLineNumber(line: string): string {
+  return line.replace(/^\s*\d{1,4}\s?/, "");
+}
+
+function isNumberedSourceLine(line: string): boolean {
+  const text = line.trim();
+  if (!/^\d{1,4}(\s|\S)/.test(text)) return false;
+  const body = stripLeadingLineNumber(text).trim();
+  if (!body) return true;
+  return looksLikeCodeLine(body);
+}
+
+function codeLineRatio(lines: string[]): number {
+  if (lines.length === 0) return 0;
+  let hits = 0;
+  for (const line of lines) {
+    if (looksLikeCodeLine(line) || isNumberedSourceLine(line)) hits += 1;
+  }
+  return hits / lines.length;
+}
+
+function isSourceDump(lines: string[]): boolean {
+  const meaningful = lines.filter(Boolean);
+  if (meaningful.length < 3) return false;
+  return codeLineRatio(meaningful) >= 0.6;
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -310,73 +478,108 @@ function escapeHtml(value: string): string {
     .replace(/>/g, "&gt;");
 }
 
-function stripLeadingLineNumber(line: string): string {
-  return line.replace(/^\s*\d{1,4}(?=[A-Za-z<{`'"]|\s|$)\s?/, "");
+function stripGutterNumbers(lines: string[]): string[] {
+  const numbered = lines.filter(isNumberedSourceLine).length;
+  if (numbered / Math.max(lines.length, 1) < 0.6) return lines;
+  return lines.map(stripLeadingLineNumber);
 }
 
-function numberedSourceScore(lines: string[]): { numbered: number; codey: number } {
-  let numbered = 0;
-  let codey = 0;
-  for (const line of lines) {
-    if (/^\d{1,4}([A-Za-z<{`'"]|\s+\S)/.test(line)) numbered += 1;
-    if (
-      /\b(import|export|const|let|var|function|interface|return|className|from)\b/.test(
-        line,
-      )
-    ) {
-      codey += 1;
-    }
+const LINE_WRAPPER_CLASS = /(^|[\s-])(line|row)([\s-]|$)/i;
+
+function isLineWrapper($: cheerio.CheerioAPI, node: any): boolean {
+  const $node = $(node);
+  const tag = String($node.prop("tagName") ?? "").toLowerCase();
+  if (tag === "div" || tag === "p") return true;
+  return LINE_WRAPPER_CLASS.test($node.attr("class") ?? "");
+}
+
+/**
+ * Highlighters like Prism wrap each line in an element and emit no newline,
+ * so the raw text would collapse the whole sample onto one line.
+ */
+function codeLines($: cheerio.CheerioAPI, $el: cheerio.Cheerio<any>): string[] {
+  const text = $el.text();
+  if (text.includes("\n")) return text.split("\n");
+
+  let $node = $el;
+  for (let depth = 0; depth < 3; depth++) {
+    const only = $node.children();
+    if (only.length !== 1) break;
+    $node = only.first();
   }
-  return { numbered, codey };
-}
 
-function isNumberedSourceLines(lines: string[]): boolean {
-  if (lines.length < 6) return false;
-  const { numbered, codey } = numberedSourceScore(lines);
-  return numbered >= 5 && numbered / lines.length > 0.5 && codey >= 2;
+  const children = $node.children().toArray();
+  if (children.length >= 2 && children.every((child) => isLineWrapper($, child))) {
+    return children.map((child) =>
+      $(child).text().replace(/\t/g, "  ").trimEnd(),
+    );
+  }
+
+  return [text];
 }
 
 function normalizePreBlocks($: cheerio.CheerioAPI): void {
   $("pre").each((_, node) => {
     const $el = $(node);
     $el.find(LINE_NUMBER_SELECTORS).remove();
-    const cleaned = $el
-      .text()
-      .split("\n")
-      .map(stripLeadingLineNumber)
+
+    const language = codeLanguage(node) || codeLanguage($el.find("code")[0]);
+    const cleaned = stripGutterNumbers(codeLines($, $el))
       .join("\n")
       .replace(/\n{3,}/g, "\n\n")
-      .trim();
-    if (!cleaned) {
+      .trimEnd();
+
+    if (!cleaned.trim()) {
       $el.remove();
       return;
     }
-    $el.replaceWith(`<pre><code>${escapeHtml(cleaned)}</code></pre>`);
+
+    const attr = language ? ` class="language-${language}"` : "";
+    $el.replaceWith(`<pre><code${attr}>${escapeHtml(cleaned)}</code></pre>`);
   });
 }
 
-function stripLineNumberedEditors($: cheerio.CheerioAPI): void {
+/**
+ * Handle code viewers that render one element per line, so they carry no `<pre>`.
+ * On docs pages they become real code blocks; elsewhere they are noise.
+ */
+function collectCodeContainers($: cheerio.CheerioAPI, keepCode: boolean): void {
   $(LINE_NUMBER_SELECTORS).remove();
 
-  $("div, section, ol, ul").each((_, node) => {
+  $("div, section, ol, ul, p, td").each((_, node) => {
     const $el = $(node);
     if (!$el.parent().length) return;
-    if ($el.find("pre, table, h1, h2, h3").length) return;
+    if ($el.find("h1, h2, h3, table, pre").length) return;
 
+    // One element per line is the highlighter shape; indentation lives in the text.
     const childLines = $el
       .children()
       .toArray()
-      .map((child) => $(child).text().replace(/\s+/g, " ").trim())
-      .filter(Boolean);
+      .map((child) => $(child).text().replace(/\t/g, "  ").trimEnd());
     const textLines = $el
       .text()
       .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
+      .map((line) => line.trimEnd());
 
-    if (isNumberedSourceLines(childLines) || isNumberedSourceLines(textLines)) {
+    const source = isSourceDump(childLines.map((line) => line.trim()))
+      ? childLines
+      : isSourceDump(textLines.map((line) => line.trim()))
+        ? textLines
+        : null;
+    if (!source) return;
+
+    if (!keepCode) {
       $el.remove();
+      return;
     }
+
+    const body = stripGutterNumbers(source)
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    const language = codeLanguage(node);
+    const attr = language ? ` class="language-${language}"` : "";
+    $el.replaceWith(`<pre><code${attr}>${escapeHtml(body)}</code></pre>`);
   });
 }
 
@@ -389,23 +592,16 @@ function isDataTable($el: cheerio.Cheerio<any>): boolean {
   return metrics >= 2 && $el.find("td").length >= 4;
 }
 
-function isLayoutTable($el: cheerio.Cheerio<any>): boolean {
-  if (isDataTable($el)) return false;
-  const role = ($el.attr("role") || "").toLowerCase();
-  if (role === "presentation") return true;
-  const dataId = `${$el.attr("data-id") || ""} ${$el.attr("class") || ""}`;
-  if (/email|react-email|joplin-table-wrapper/i.test(dataId)) return true;
-  if ($el.find("[data-id*='react-email']").length) return true;
-  if ($el.find("table").length > 0) return true;
-  return false;
-}
-
+/**
+ * Only real data tables survive. Everything else is layout scaffolding, and
+ * nested layout tables are what the GFM plugin leaks as raw HTML.
+ */
 function flattenLayoutTables($: cheerio.CheerioAPI): void {
   const tables = $("table").toArray().reverse();
   for (const node of tables) {
     const $el = $(node);
     if (!$el.parent().length) continue;
-    if (!isLayoutTable($el)) continue;
+    if (isDataTable($el)) continue;
     $el.remove();
   }
 }
@@ -504,32 +700,92 @@ function isTableLine(line: string): boolean {
   );
 }
 
-export function cleanMarkdown(markdown: string): string {
+/** Fenced code answers nothing a support agent is asked; drop it wholesale. */
+const FENCE_TOKEN = "\u27e6into-code-";
+const FENCE_TOKEN_END = "\u27e7";
+const FENCE_TOKEN_LINE = new RegExp(
+  `^${FENCE_TOKEN}(\\d+)${FENCE_TOKEN_END}$`,
+);
+
+function isFenceToken(text: string): boolean {
+  return FENCE_TOKEN_LINE.test(text.trim());
+}
+
+/** Lifts fenced blocks out of the text, leaving one placeholder line each. */
+function extractFences(markdown: string, store: string[]): string {
+  const out: string[] = [];
+  let buffer: string[] | null = null;
+
+  const close = (): void => {
+    if (!buffer) return;
+    store.push(buffer.join("\n"));
+    out.push("", `${FENCE_TOKEN}${store.length - 1}${FENCE_TOKEN_END}`, "");
+    buffer = null;
+  };
+
+  for (const line of markdown.split("\n")) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      if (buffer) {
+        buffer.push(line.trim());
+        close();
+      } else {
+        buffer = [line.trim()];
+      }
+      continue;
+    }
+    if (buffer) buffer.push(line);
+    else out.push(line);
+  }
+
+  close();
+  return out.join("\n");
+}
+
+function restoreFences(markdown: string, store: string[]): string {
+  if (store.length === 0) return markdown;
+  return markdown
+    .split("\n")
+    .map((line) => {
+      const match = line.trim().match(FENCE_TOKEN_LINE);
+      return match ? (store[Number(match[1])] ?? "") : line;
+    })
+    .join("\n");
+}
+
+function dropFencedCode(markdown: string): string {
+  const out: string[] = [];
+  let inFence = false;
+
+  for (const line of markdown.split("\n")) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (!inFence) out.push(line);
+  }
+
+  return out.join("\n");
+}
+
+export function cleanMarkdown(markdown: string, keepCode = false): string {
   let text = markdown
     .replace(/\u00a0/g, " ")
     .replace(/\r\n/g, "\n")
     .replace(/[ \t]+\n/g, "\n");
 
+  // Code samples leave the cleaning pipeline as opaque tokens so no
+  // line or block heuristic can reindent, split, or drop part of them.
+  const fences: string[] = [];
+  text = keepCode ? extractFences(text, fences) : dropFencedCode(text);
   text = text.replace(/\]\(([^)]+)\)\[/g, "]($1)\n[");
 
   const lines = text.split("\n");
   const out: string[] = [];
-  let inFence = false;
+  let afterSource = false;
 
   for (const rawLine of lines) {
     const line = rawLine.trimEnd();
     const trimmed = line.trim();
-
-    if (/^```/.test(trimmed)) {
-      inFence = !inFence;
-      out.push(line);
-      continue;
-    }
-
-    if (inFence) {
-      out.push(line);
-      continue;
-    }
 
     if (!trimmed) {
       if (out.length && out[out.length - 1] !== "") out.push("");
@@ -538,6 +794,28 @@ export function cleanMarkdown(markdown: string): string {
 
     // Preserve GFM tables untouched.
     if (isTableLine(trimmed)) {
+      afterSource = false;
+      out.push(line);
+      continue;
+    }
+
+    // Unfenced code is leaked widget markup, not an example worth keeping.
+    if (!keepCode) {
+      if (isSourceLine(trimmed)) {
+        afterSource = true;
+        continue;
+      }
+      // Orphan gutter numbers left behind by a line-numbered code viewer.
+      if (afterSource && /^\d{1,4}$/.test(trimmed)) continue;
+      afterSource = false;
+    }
+
+    // Headings carry section context ("Pricing", "Docs"), so only the
+    // boilerplate list may drop them — never the CTA/chrome heuristics.
+    if (/^#{1,6}/.test(trimmed)) {
+      const label = trimmed.replace(/^#{1,6}\s*/, "").trim();
+      if (!label) continue;
+      if (BOILERPLATE_HEADING.test(label)) continue;
       out.push(line);
       continue;
     }
@@ -558,46 +836,51 @@ export function cleanMarkdown(markdown: string): string {
       if (label.split(/\s+/).length <= 3 || CTA_LINE.test(label)) continue;
     }
 
-    // Drop empty / decorative headings.
-    if (/^#{1,6}\s*$/.test(trimmed)) continue;
-    if (
-      /^#{1,6}\s+/.test(trimmed) &&
-      BOILERPLATE_HEADING.test(trimmed.replace(/^#{1,6}\s+/, ""))
-    ) {
-      continue;
-    }
-
-    out.push(line);
+    // Unwrapped inline elements leave gaps before punctuation.
+    out.push(line.replace(/\s+([.,;:!?])/g, "$1"));
   }
 
-  text = dropJunkBlocks(out.join("\n"));
+  text = dropJunkBlocks(out.join("\n"), keepCode);
+  text = dropUiFragmentRuns(text);
   text = dedupeRepeatedBlocks(text);
   text = stripOrphanListCtas(text);
 
-  return text
+  text = text
     .replace(/\n{3,}/g, "\n\n")
     .replace(/[ \t]+$/gm, "")
     .trim();
+
+  return restoreFences(text, fences);
+}
+
+/** A markdown line that is source code or an API payload sample. */
+function isSourceLine(line: string): boolean {
+  const bare = line
+    .replace(/^[-*+]\s+/, "")
+    .replace(/^`+|`+$/g, "")
+    .trim();
+  if (!bare) return false;
+  if (/^#{1,6}\s/.test(bare)) return false;
+  if (isTableLine(bare)) return false;
+  return looksLikeCodeLine(bare) || isNumberedSourceLine(bare);
 }
 
 function unglueCamel(text: string): string {
   return text.replace(/([a-z])([A-Z])/g, "$1 $2");
 }
 
+const HTML_TAG = /<\/?[a-z][\w:-]*(\s[^<>]*)?>/gi;
+const HTML_TAG_WITH_ATTRIBUTE = /<[a-z][\w:-]*\s+[\w:-]+\s*=/i;
+
+/** Raw markup that survived conversion (nested layout tables, wrappers, srcsets). */
 function isLeakedHtmlLine(line: string): boolean {
   if (/joplin-table-wrapper/i.test(line)) return true;
   if (/data-id=["'][^"']*react-email/i.test(line)) return true;
-  if (/data-nimg=|_next\/image\?/i.test(line)) return true;
-  if (/^<table[\s>]/i.test(line) && /<\/table>/i.test(line)) return true;
-  if (
-    /^<(div|section|span)[\s>]/i.test(line) &&
-    /<\/(div|section|span)>/i.test(line) &&
-    /style=|data-id=/.test(line) &&
-    line.length > 200
-  ) {
-    return true;
-  }
-  return false;
+  if (/data-nimg=|_next\/image\?|srcset=/i.test(line)) return true;
+  if (HTML_TAG_WITH_ATTRIBUTE.test(line)) return true;
+
+  const tagCount = (line.match(HTML_TAG) ?? []).length;
+  return tagCount >= 3;
 }
 
 function isChromeLine(line: string): boolean {
@@ -611,6 +894,9 @@ function isChromeLine(line: string): boolean {
 
   if (!plain) return true;
   if (CTA_LINE.test(plain)) return true;
+  // API demo captions: "HTTP 200:", "POST /emails".
+  if (/^http\/?[\d.]*\s+\d{3}\s*:?$/i.test(plain)) return true;
+  if (/^(get|post|put|patch|delete)\s+\/\S*$/i.test(plain)) return true;
   if (/^(©|copyright|\u00a9)/i.test(plain)) return true;
   if (/all rights reserved/i.test(plain)) return true;
   if (
@@ -634,36 +920,70 @@ function isChromeLine(line: string): boolean {
   return false;
 }
 
-function isNumberedSourceBlock(block: string): boolean {
+function isSourceBlock(block: string): boolean {
   const lines = block
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
-  return isNumberedSourceLines(lines);
+  if (lines.length === 1) return isSourceLine(lines[0]!);
+  return isSourceDump(lines);
 }
 
-function isJsxFileDump(block: string): boolean {
-  if (block.includes("```")) return false;
-  return (
-    /import\s+\{[^}]+\}\s+from\s+['"]/.test(block) &&
-    /export default/.test(block) &&
-    /<\w+[\s>]/.test(block)
-  );
-}
-
-function dropJunkBlocks(markdown: string): string {
+function dropJunkBlocks(markdown: string, keepCode: boolean): string {
   return markdown
     .split(/\n{2,}/)
     .filter((block) => {
       const trimmed = block.trim();
       if (!trimmed) return false;
-      if (trimmed.includes("```")) return true;
+      if (isFenceToken(trimmed)) return true;
       if (isLeakedHtmlLine(trimmed)) return false;
-      if (isNumberedSourceBlock(trimmed)) return false;
-      if (isJsxFileDump(trimmed)) return false;
+      if (!keepCode && isSourceBlock(trimmed)) return false;
       return true;
     })
     .join("\n\n");
+}
+
+const UI_FRAGMENT_RUN = 3;
+
+/**
+ * Interactive widgets (editors, mail previews, event simulators) collapse into
+ * runs of caption-length fragments. Isolated short labels are kept.
+ */
+function isUiFragmentBlock(block: string): boolean {
+  const text = block.trim();
+  if (!text || text.includes("\n")) return false;
+  if (isFenceToken(text)) return false;
+  if (text.length > 48) return false;
+  if (/^[#>|]/.test(text)) return false;
+  if (/^[-*+]\s/.test(text)) return false;
+  if (/[.!?]$/.test(text)) return false;
+  if (/[$%]|\d\s*(\/|per)\s*\w/.test(text)) return false;
+
+  const words = text.split(/\s+/).filter(Boolean);
+  return words.length <= 6;
+}
+
+function dropUiFragmentRuns(markdown: string): string {
+  const blocks = markdown.split(/\n{2,}/);
+  const kept: string[] = [];
+  let run: string[] = [];
+
+  const flushRun = (): void => {
+    if (run.length > 0 && run.length < UI_FRAGMENT_RUN) kept.push(...run);
+    run = [];
+  };
+
+  for (const block of blocks) {
+    if (isUiFragmentBlock(block)) {
+      run.push(block.trim());
+      continue;
+    }
+    flushRun();
+    if (block.trim()) kept.push(block.trim());
+  }
+  flushRun();
+
+  return kept.join("\n\n");
 }
 
 function isCtaOnlyPhrase(plain: string): boolean {
@@ -919,8 +1239,56 @@ export function isContentlessMarkdown(markdown: string): boolean {
   return prose.length < 60;
 }
 
-function stripChrome($: cheerio.CheerioAPI): void {
-  for (const selector of REMOVE_SELECTORS) {
+/**
+ * Tooltip triggers are buttons inside sentences. Removing them outright leaves
+ * holes ("added to a  such as …"), so keep their label before the chrome pass.
+ */
+function unwrapInlineButtons($: cheerio.CheerioAPI): void {
+  $("button").each((_, node) => {
+    const $el = $(node);
+    if (!$el.parent().length) return;
+    if (!$el.parent().is("p, li, td, th, h1, h2, h3, h4, h5, h6, span, em, strong")) {
+      return;
+    }
+
+    const label = textOf($el);
+    if (!label || label.length > 60) return;
+    if (CTA_LINE.test(label)) return;
+
+    $el.replaceWith(` ${label} `);
+  });
+}
+
+/**
+ * Headings often wrap anchor links in a block element and break lines with
+ * `<br>`; either one makes Turndown emit an empty `##` and orphan the title.
+ */
+function flattenHeadings($: cheerio.CheerioAPI): void {
+  $("h1, h2, h3, h4, h5, h6").each((_, node) => {
+    const $el = $(node);
+    const text = $el
+      .text()
+      .replace(/\u200b/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (!text) {
+      $el.remove();
+      return;
+    }
+    $el.text(text);
+  });
+}
+
+function stripChrome($: cheerio.CheerioAPI, keepCode: boolean): void {
+  unwrapInlineButtons($);
+  flattenHeadings($);
+
+  const selectors = keepCode
+    ? REMOVE_SELECTORS
+    : [...REMOVE_SELECTORS, ...CODE_SELECTORS];
+
+  for (const selector of selectors) {
     try {
       $(selector).remove();
     } catch {
@@ -931,9 +1299,9 @@ function stripChrome($: cheerio.CheerioAPI): void {
   stripBannerHeaders($);
   removeBoilerplateSections($);
   removeLinkFarms($);
-  stripLineNumberedEditors($);
+  if (keepCode) normalizePreBlocks($);
+  collectCodeContainers($, keepCode);
   flattenLayoutTables($);
-  normalizePreBlocks($);
 
   $("a").each((_, node) => {
     const $el = $(node);
@@ -954,10 +1322,19 @@ function stripChrome($: cheerio.CheerioAPI): void {
   });
 }
 
-export function htmlToMarkdown(html: string): string {
+export type ConvertPageOptions = {
+  /** Keep code samples as fenced blocks. Set for documentation pages. */
+  keepCode?: boolean;
+};
+
+export function htmlToMarkdown(
+  html: string,
+  options: ConvertPageOptions = {},
+): string {
+  const keepCode = options.keepCode ?? false;
   const $ = cheerio.load(html);
 
-  stripChrome($);
+  stripChrome($, keepCode);
 
   const mainHtml = pickMainHtml($);
   if (!mainHtml.trim()) {
@@ -965,12 +1342,12 @@ export function htmlToMarkdown(html: string): string {
   }
 
   const $$ = cheerio.load(`<div id="into-root">${mainHtml}</div>`);
-  stripChrome($$);
+  stripChrome($$, keepCode);
   structureCardLayouts($$);
 
   const fragment = $$("#into-root").html() ?? "";
   if (!fragment.trim()) return "";
 
-  const turndown = createTurndown();
-  return cleanMarkdown(turndown.turndown(fragment));
+  const turndown = createTurndown(keepCode);
+  return cleanMarkdown(turndown.turndown(fragment), keepCode);
 }

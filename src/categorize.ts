@@ -28,6 +28,8 @@ const RULES: Rule[] = [
       /\/reference(?:\/|$)/i,
       /\/changelog/i,
       /\/developers?(?:\/|$)/i,
+      /\/handbook(?:\/|$)/i,
+      /\/kb(?:\/|$)/i,
     ],
   },
   {
@@ -93,16 +95,40 @@ const RULES: Rule[] = [
   },
 ];
 
+/** First label of a host: docs.markdown.io, help.acme.com, www.docs.acme.com. */
+const DOCS_HOST_LABEL =
+  /^(www\.)?(docs?|help|support|developers?|api|reference|guides?|learn|handbook|kb)\./i;
+
+const DOCS_PATH =
+  /\/(docs?|documentation|help|support|guides?|api|sdk|reference|developers?|handbook|kb)(\/|$)/i;
+
+function hostnameLooksLikeDocs(hostname: string): boolean {
+  return DOCS_HOST_LABEL.test(hostname);
+}
+
+function pathLooksLikeDocs(pathname: string): boolean {
+  return DOCS_PATH.test(pathname);
+}
+
 export function categorizeUrl(pageUrl: string, rootUrl: string): PageCategory {
   let path = "/";
   try {
     const page = new URL(pageUrl);
+    if (hostnameLooksLikeDocs(page.hostname)) {
+      return "Docs";
+    }
+
     const root = new URL(rootUrl);
     path = page.pathname || "/";
     const rootPath =
       root.pathname === "/" ? "/" : root.pathname.replace(/\/$/, "");
     if (path === "/" || path === rootPath || path === `${rootPath}/`) {
-      return "Home";
+      return hostnameLooksLikeDocs(root.hostname) || pathLooksLikeDocs(rootPath)
+        ? "Docs"
+        : "Home";
+    }
+    if (pathLooksLikeDocs(path)) {
+      return "Docs";
     }
   } catch {
     return "Other";
@@ -119,4 +145,21 @@ export function categorizeUrl(pageUrl: string, rootUrl: string): PageCategory {
 
 export function categoryAnchor(category: PageCategory): string {
   return category.toLowerCase();
+}
+
+// Code samples are mandatory on documentation pages. Fence code everywhere except on docs.
+
+export function isDocumentationUrl(pageUrl: string, rootUrl: string): boolean {
+  try {
+    const page = new URL(pageUrl);
+    if (hostnameLooksLikeDocs(page.hostname)) return true;
+    if (pathLooksLikeDocs(page.pathname)) return true;
+
+    const root = new URL(rootUrl);
+    return (
+      hostnameLooksLikeDocs(root.hostname) || pathLooksLikeDocs(root.pathname)
+    );
+  } catch {
+    return false;
+  }
 }

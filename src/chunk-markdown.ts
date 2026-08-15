@@ -4,6 +4,14 @@ export type MarkdownChunk = {
   chunkIndex: number;
 };
 
+/**
+ * `prefixHeadings` repeats the heading path inside each chunk so embeddings
+ * keep their context. Turn it off when chunks are re-joined into one document.
+ */
+export type ChunkOptions = {
+  prefixHeadings?: boolean;
+};
+
 /** ~225 tokens — one heading section stays on-topic for agent ingest. */
 const MAX_CHUNK_CHARS = 900;
 const MIN_CHUNK_CHARS = 40;
@@ -97,7 +105,11 @@ export function splitByMaxChars(text: string, maxChars: number): string[] {
   return parts;
 }
 
-function prefixHeading(content: string, heading: string | null): string {
+function identity(content: string, _heading: string | null): string {
+  return content;
+}
+
+function prefixHeadingPath(content: string, heading: string | null): string {
   if (!heading) {
     return content;
   }
@@ -112,17 +124,53 @@ function prefixHeading(content: string, heading: string | null): string {
   return next;
 }
 
+function isFenceDelimiter(line: string): boolean {
+  return /^\s*(```|~~~)/.test(line);
+}
+
+/** Blank-line split that never cuts a fenced code sample in two. */
+function splitBlocks(text: string): string[] {
+  const blocks: string[] = [];
+  let current: string[] = [];
+  let inFence = false;
+
+  const flush = (): void => {
+    const block = current.join("\n").trim();
+    if (block) blocks.push(block);
+    current = [];
+  };
+
+  for (const line of text.split("\n")) {
+    if (isFenceDelimiter(line)) {
+      inFence = !inFence;
+      current.push(line);
+      if (!inFence) flush();
+      continue;
+    }
+    if (!inFence && !line.trim()) {
+      flush();
+      continue;
+    }
+    current.push(line);
+  }
+
+  flush();
+  return blocks;
+}
+
 function splitOversizedChunk(
   content: string,
   heading: string | null,
   startIndex: number,
+  withHeadingPrefix: boolean,
 ): MarkdownChunk[] {
+  const prefixHeading = withHeadingPrefix ? prefixHeadingPath : identity;
   const prefixed = prefixHeading(content, heading);
   if (prefixed.length <= MAX_CHUNK_CHARS) {
     return [{ content: prefixed, heading, chunkIndex: startIndex }];
   }
 
-  const paragraphs = prefixed.split(/\n{2,}/).filter(Boolean);
+  const paragraphs = splitBlocks(prefixed);
   const chunks: MarkdownChunk[] = [];
   let buffer = "";
   let index = startIndex;
@@ -144,6 +192,13 @@ function splitOversizedChunk(
   for (const paragraph of paragraphs) {
     const para = paragraph.trim();
     if (!para) {
+      continue;
+    }
+
+    // An oversized code sample stays whole; splitting it corrupts the fence.
+    if (para.length > MAX_CHUNK_CHARS && isFenceDelimiter(para)) {
+      flushBuffer();
+      chunks.push({ content: para, heading, chunkIndex: index++ });
       continue;
     }
 
@@ -179,7 +234,11 @@ function buildHeadingPath(stack: (string | null)[]): string | null {
   return path.length > 512 ? path.slice(0, 512) : path;
 }
 
-export function chunkMarkdown(markdown: string): MarkdownChunk[] {
+export function chunkMarkdown(
+  markdown: string,
+  options: ChunkOptions = {},
+): MarkdownChunk[] {
+  const withHeadingPrefix = options.prefixHeadings ?? true;
   const trimmed = cleanMarkdownForChunking(markdown);
   if (!trimmed) {
     return [];
@@ -226,14 +285,19 @@ export function chunkMarkdown(markdown: string): MarkdownChunk[] {
   flushSection();
 
   if (sections.length === 0) {
-    return splitOversizedChunk(trimmed, null, 0);
+    return splitOversizedChunk(trimmed, null, 0, withHeadingPrefix);
   }
 
   const chunks: MarkdownChunk[] = [];
   let index = 0;
   for (const section of sections) {
     const content = section.lines.join("\n").trim();
-    for (const chunk of splitOversizedChunk(content, section.heading, index)) {
+    for (const chunk of splitOversizedChunk(
+      content,
+      section.heading,
+      index,
+      withHeadingPrefix,
+    )) {
       chunks.push(chunk);
       index = chunk.chunkIndex + 1;
     }
