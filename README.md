@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="into-md.png" alt="Into markdown — paste a URL, get every sub-page as a clean .md knowledge document" width="1200">
+</p>
+
 # @humaner/into-markdown
 
 **Crawl a website. Get one clean markdown file for your agent knowledge source.** No API needed.

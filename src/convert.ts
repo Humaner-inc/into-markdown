@@ -13,6 +13,7 @@ import {
   extractTitle,
   hasNoindex,
   htmlToMarkdown,
+  isChromeTitle,
   isContentlessMarkdown,
 } from "./html-to-markdown.js";
 import {
@@ -24,7 +25,7 @@ import {
   type ConvertResult,
   type CrawledPage,
 } from "./types.js";
-import { hostnameFilename, normalizePageUrl, normalizeRootUrl } from "./url.js";
+import { hostnameFilename, isNonKnowledgePath, normalizePageUrl, normalizeRootUrl } from "./url.js";
 
 const MAX_MARKDOWN_CHARS = 1_500_000;
 
@@ -62,41 +63,68 @@ export async function convertSiteToMarkdown(
 
     const pages: CrawledPage[] = [];
     const seenFinal = new Set<string>();
+    const seenBodies = new Set<string>();
     let siteName = root.hostname.replace(/^www\./i, "");
     let blurb: string | null = null;
+
+    const rootPath = root.pathname.replace(/\/+$/, "") || "/";
 
     for (const page of fetched) {
       if (!page) continue;
       if (hasNoindex(page.html)) continue;
 
-      // Drop off-site finals (open redirect / SSRF exfil).
+      try {
+        if (isNonKnowledgePath(new URL(page.url).pathname)) continue;
+        if (isNonKnowledgePath(new URL(page.finalUrl).pathname)) continue;
+      } catch {
+        continue;
+      }
+
+      const requestedNormalized = normalizePageUrl(page.url, root);
       const finalNormalized = normalizePageUrl(page.finalUrl, root);
       if (!finalNormalized) continue;
-      if (seenFinal.has(finalNormalized)) continue;
-      seenFinal.add(finalNormalized);
 
-      const title = extractTitle(page.html, finalNormalized);
-      const category = categorizeUrl(finalNormalized, rootUrl);
+      const identityUrl = requestedNormalized ?? finalNormalized;
+      if (seenFinal.has(identityUrl)) continue;
 
-      // Docs examples answer real questions; code elsewhere is UI decoration.
+      const title = extractTitle(page.html, identityUrl);
+      const category = categorizeUrl(identityUrl, rootUrl);
+
       const markdown = htmlToMarkdown(page.html, {
         keepCode:
-          category === "Docs" || isDocumentationUrl(finalNormalized, rootUrl),
+          category === "Docs" || isDocumentationUrl(identityUrl, rootUrl),
       });
       if (!markdown || isContentlessMarkdown(markdown)) continue;
 
-      const pageBlurb = extractBlurb(page.html);
+      const bodyKey = markdown.replace(/\s+/g, " ").trim().toLowerCase();
+      if (bodyKey && seenBodies.has(bodyKey)) continue;
+      seenBodies.add(bodyKey);
+      seenFinal.add(identityUrl);
 
-      if (category === "Home") {
+      const pageBlurb = extractBlurb(page.html);
+      let requestedPath = "/";
+      try {
+        requestedPath = new URL(page.url).pathname.replace(/\/+$/, "") || "/";
+      } catch {
+        requestedPath = "/";
+      }
+      const fromRoot = requestedPath === rootPath;
+
+      // Site identity comes from the URL the user pasted, never from a
+      // /contact overlay that redirected home and stole og:title.
+      if (fromRoot && !isChromeTitle(title)) {
         siteName = title || siteName;
         blurb = pageBlurb ?? blurb;
-      } else if (!blurb && pageBlurb) {
+      } else if (fromRoot && !blurb && pageBlurb && !isChromeTitle(title)) {
         blurb = pageBlurb;
       }
 
       pages.push({
-        url: finalNormalized,
-        title: title || finalNormalized,
+        url: identityUrl,
+        title:
+          fromRoot && isChromeTitle(title)
+            ? siteName
+            : title || identityUrl,
         markdown,
         category,
         blurb: pageBlurb,

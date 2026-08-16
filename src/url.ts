@@ -124,6 +124,23 @@ export function normalizePageUrl(href: string, base: URL): string | null {
   return url.href;
 }
 
+/** Auth walls are not knowledge. Contact pages can be — keep those. */
+export function isNonKnowledgePath(pathname: string): boolean {
+  return /\/(login|log-in|signin|sign-in|signup|sign-up|register|auth)(?:\/|$)/i.test(
+    pathname,
+  );
+}
+
+/** CTA / account-flow URLs that should not occupy crawl slots. */
+export function isUtilityPath(pathname: string): boolean {
+  return (
+    isNonKnowledgePath(pathname) ||
+    /\/(get-started|getting-started|confirm|unsubscribe|verify-email|callback|oauth)(?:\/|$)/i.test(
+      pathname,
+    )
+  );
+}
+
 /** Same-site sitemap index URLs (.xml only). */
 export function normalizeSitemapUrl(href: string, base: URL): string | null {
   let url: URL;

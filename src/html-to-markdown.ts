@@ -1200,21 +1200,37 @@ function dedupeRepeatedBlocks(markdown: string): string {
   return kept.join("\n\n");
 }
 
+const CHROME_TITLE =
+  /^(contact( us)?|sign up|sign in|log in|login|get started|book a demo|home|menu|search|subscribe|newsletter)$/i;
+
+function stripBrandSuffix(title: string): string {
+  return title.replace(/\s*[|\-–—·]\s*.+$/, "").trim() || title;
+}
+
 export function extractTitle(html: string, fallbackUrl: string): string {
   const $ = cheerio.load(html);
-  const og = $('meta[property="og:title"]').attr("content")?.trim();
-  if (og) return og.replace(/\s*[|\-–—·]\s*.+$/, "").trim() || og;
-  const title = $("title").first().text().trim();
-  if (title) {
-    return title.replace(/\s*[|\-–—·]\s*[^|\-–—·]+$/, "").trim() || title;
+  const og = $('meta[property="og:title"]').attr("content")?.trim() ?? "";
+  const doc = $("title").first().text().trim();
+  const h1 = $("h1").first().text().replace(/\s+/g, " ").trim();
+
+  // Document title first: og:title often names a Contact overlay while
+  // the visible page is still the marketing homepage.
+  for (const raw of [doc, og, h1]) {
+    if (!raw) continue;
+    const candidate = stripBrandSuffix(raw);
+    if (!candidate) continue;
+    return candidate;
   }
-  const h1 = $("h1").first().text().trim();
-  if (h1) return h1;
+
   try {
     return new URL(fallbackUrl).hostname;
   } catch {
     return "Untitled";
   }
+}
+
+export function isChromeTitle(title: string): boolean {
+  return CHROME_TITLE.test(stripBrandSuffix(title));
 }
 
 export function extractBlurb(html: string): string | null {
@@ -1242,7 +1258,7 @@ export function hasNoindex(html: string): boolean {
 export function extractLinks(html: string, baseUrl: URL): string[] {
   const $ = cheerio.load(html);
   const hrefs: string[] = [];
-  $("a[href]").each((_, el) => {
+  $("a[href], area[href]").each((_, el) => {
     const href = $(el).attr("href");
     if (href) hrefs.push(href);
   });
