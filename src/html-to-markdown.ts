@@ -99,6 +99,13 @@ const REMOVE_SELECTORS = [
   "[class*='Sandbox']",
   "[class*='demo']",
   "[class*='Demo']",
+  "[role='tablist']",
+  "[class*='cta-banner']",
+  "[class*='cta-bar']",
+  "[class*='cta-section']",
+  "[class*='CtaBanner']",
+  "[class*='hero-cta']",
+  "[class*='call-to-action']",
 ];
 
 //Source samples and syntax highlighters > dropped unless the page is docs.
@@ -130,7 +137,10 @@ const BOILERPLATE_HEADING =
   /^(related|related (articles|posts|products|links)|recommended|you may also like|popular|trending|share( this)?|follow us|subscribe|newsletter|partners|as seen in|trusted by|back to( top| home)?|skip to (content|main)|table of contents|on this page|contents|navigation|menu|categories|tags|recent posts|more from|explore|get started|sign up|log in|login|try (it )?free|book a demo|contact sales|request a demo)$/i;
 
 const CTA_LINE =
-  /^(get started|sign up( free)?|sign in|log in|login|contact( us| sales)?|book( a)? demo|request( a)? demo|try( it)?( for)? free|start( for)? free|learn more|read more|see( all| more| pricing| examples)?|view( all| more)?|download|subscribe|join( now| free)?|talk to (us|sales)|schedule a call|watch( the)? (demo|video)|check the docs|documentation|docs|pricing|home|features|blog|careers|about( us)?|privacy( policy)?|terms( of (service|use))?|cookie(s| policy)?|copy( to clipboard)?|copied!?)$/i;
+  /^(get started|sign up( free)?|sign in|log in|login|contact( us| sales)?|book( a)? demo|request( a)? demo|try( it)?( for)? free|start( for)? free|start (now|building)|learn more|read more|see( all| more| pricing| examples)?|view( all| more)?|download|subscribe|join( now| free| us)?|talk to (us|sales)|schedule a call|watch( the)? (demo|video)|check the docs|documentation|docs|pricing|home|features|blog|careers|about( us)?|privacy( policy)?|terms( of (service|use))?|cookie(s| policy)?|copy( to clipboard)?|copied!?)$/i;
+
+const CODE_TAB_LABEL =
+  /^(node\.?js|javascript|typescript|python|php|ruby|go|golang|rust|java|\.net|csharp|c#|curl|cli|npm|yarn|pnpm|bun|response|request|shell|bash|sh|html|css|json|yaml|toml)$/i;
 
 const DECORATIVE_ALT =
   /\b(logo|icon|image|photo|picture|background|banner|hero|illustration|screenshot|graphic|pattern|gradient|texture|glow|ray|blur|decoration|decorative|mockup|thumbnail|avatar|placeholder|arrow|divider|shape)\b/i;
@@ -265,7 +275,13 @@ function createTurndown(keepCode: boolean): TurndownService {
       const isHashOrJs =
         !href || href.startsWith("#") || href.startsWith("javascript:");
       const isShortNav = words.length <= 3 && !looksLikeUrl;
+      const looksLikeCard =
+        words.length >= 6 &&
+        /\b(?:https?:\/\/)?(?:www\.)?[a-z0-9-]+\.[a-z]{2,}(?:\/\S*)?/i.test(
+          label,
+        );
 
+      if (looksLikeCard) return "";
       if (isHashOrJs || isShortNav || CTA_LINE.test(label)) {
         return label;
       }
@@ -471,6 +487,19 @@ function isSourceDump(lines: string[]): boolean {
   return codeLineRatio(meaningful) >= 0.6;
 }
 
+/** Multi-line source stays fenced; one-liners and chrome render as prose. */
+function isSourceSample(text: string): boolean {
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length < 2) return false;
+  if (lines.every((line) => CTA_LINE.test(line) || CODE_TAB_LABEL.test(line))) {
+    return false;
+  }
+  return isSourceDump(lines) || codeLineRatio(lines) >= 0.5;
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -534,24 +563,33 @@ function normalizePreBlocks($: cheerio.CheerioAPI): void {
       return;
     }
 
+    // One-liners, tab labels, and chrome belong in the prose, not a fence.
+    if (!isSourceSample(cleaned)) {
+      $el.replaceWith(`<p>${escapeHtml(cleaned.trim())}</p>`);
+      return;
+    }
+
     const attr = language ? ` class="language-${language}"` : "";
     $el.replaceWith(`<pre><code${attr}>${escapeHtml(cleaned)}</code></pre>`);
   });
 }
 
 /**
- * Handle code viewers that render one element per line, so they carry no `<pre>`.
- * On docs pages they become real code blocks; elsewhere they are noise.
+ * Highlighters that skip `<pre>` still need a fence. Layout containers do not.
  */
 function collectCodeContainers($: cheerio.CheerioAPI, keepCode: boolean): void {
   $(LINE_NUMBER_SELECTORS).remove();
 
-  $("div, section, ol, ul, p, td").each((_, node) => {
+  const viewers = CODE_SELECTORS.filter(
+    (selector) => selector !== "pre" && selector !== "samp",
+  ).join(", ");
+
+  $(viewers).each((_, node) => {
     const $el = $(node);
     if (!$el.parent().length) return;
-    if ($el.find("h1, h2, h3, table, pre").length) return;
+    if ($el.find("pre").length) return;
+    if ($el.find("h1, h2, h3, table").length) return;
 
-    // One element per line is the highlighter shape; indentation lives in the text.
     const childLines = $el
       .children()
       .toArray()
@@ -577,6 +615,11 @@ function collectCodeContainers($: cheerio.CheerioAPI, keepCode: boolean): void {
       .join("\n")
       .replace(/\n{3,}/g, "\n\n")
       .trim();
+    if (!isSourceSample(body)) {
+      $el.replaceWith(`<p>${escapeHtml(body)}</p>`);
+      return;
+    }
+
     const language = codeLanguage(node);
     const attr = language ? ` class="language-${language}"` : "";
     $el.replaceWith(`<pre><code${attr}>${escapeHtml(body)}</code></pre>`);
@@ -711,16 +754,51 @@ function isFenceToken(text: string): boolean {
   return FENCE_TOKEN_LINE.test(text.trim());
 }
 
+function fenceKey(block: string): string {
+  return block
+    .replace(/^\s*(```|~~~)[^\n]*/gm, "```")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+/** Drop tab chrome and CTA-only fences; keep real samples even when unlabelled. */
+function isUsefulFence(block: string): boolean {
+  const inner = block
+    .split("\n")
+    .filter((line) => !/^\s*(```|~~~)/.test(line))
+    .join("\n")
+    .trim();
+  if (!inner) return false;
+
+  const lines = inner
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) return false;
+  if (lines.every((line) => CTA_LINE.test(line) || CODE_TAB_LABEL.test(line))) {
+    return false;
+  }
+  return true;
+}
+
 /** Lifts fenced blocks out of the text, leaving one placeholder line each. */
 function extractFences(markdown: string, store: string[]): string {
   const out: string[] = [];
   let buffer: string[] | null = null;
 
+  const seen = new Set<string>();
+
   const close = (): void => {
     if (!buffer) return;
-    store.push(buffer.join("\n"));
-    out.push("", `${FENCE_TOKEN}${store.length - 1}${FENCE_TOKEN_END}`, "");
+    const block = buffer.join("\n");
     buffer = null;
+    if (!isUsefulFence(block)) return;
+    const key = fenceKey(block);
+    if (seen.has(key)) return;
+    seen.add(key);
+    store.push(block);
+    out.push("", `${FENCE_TOKEN}${store.length - 1}${FENCE_TOKEN_END}`, "");
   };
 
   for (const line of markdown.split("\n")) {
@@ -844,6 +922,7 @@ export function cleanMarkdown(markdown: string, keepCode = false): string {
   text = dropUiFragmentRuns(text);
   text = dedupeRepeatedBlocks(text);
   text = stripOrphanListCtas(text);
+  text = dropEmptyHeadings(text);
 
   text = text
     .replace(/\n{3,}/g, "\n\n")
@@ -899,6 +978,7 @@ function isChromeLine(line: string): boolean {
   if (/^(get|post|put|patch|delete)\s+\/\S*$/i.test(plain)) return true;
   if (/^(©|copyright|\u00a9)/i.test(plain)) return true;
   if (/all rights reserved/i.test(plain)) return true;
+  if (/^[⌘⌃⇧⌥^][a-z0-9]?$/i.test(plain)) return true;
   if (
     /^(privacy|terms|cookies?)(\s*[|/·•]\s*(privacy|terms|cookies?))+$/i.test(
       plain,
@@ -1079,6 +1159,29 @@ function stripOrphanListCtas(markdown: string): string {
   }
 
   return kept.join("\n\n");
+}
+
+/** Drop a heading that has no body before the next heading (CTA sections, empty cards). */
+function dropEmptyHeadings(markdown: string): string {
+  const lines = markdown.split("\n");
+  const out: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (!/^#{1,6}\s+\S/.test(line.trim())) {
+      out.push(line);
+      continue;
+    }
+
+    let j = i + 1;
+    while (j < lines.length && !lines[j]!.trim()) j += 1;
+    if (j >= lines.length || /^#{1,6}\s+\S/.test(lines[j]!.trim())) {
+      continue;
+    }
+    out.push(line);
+  }
+
+  return out.join("\n");
 }
 
 function dedupeRepeatedBlocks(markdown: string): string {
@@ -1280,6 +1383,66 @@ function flattenHeadings($: cheerio.CheerioAPI): void {
   });
 }
 
+function hasCtaClass($el: cheerio.Cheerio<any>): boolean {
+  const cls = ($el.attr("class") ?? "").toLowerCase();
+  return (
+    /(^|[\s_-])(card|cta|tile|teaser)s?([\s_-]|$)/.test(cls) ||
+    /call[-_]?to[-_]?action/.test(cls)
+  );
+}
+
+function isMetricTile(text: string): boolean {
+  return /\$\d|[\d,]+\s*%|\d+\s*\/\s*(mo|yr|month)|\/mo\b/i.test(text);
+}
+
+/** Short linked pitch tiles — landing-page CTA cards, not knowledge. */
+function isCtaTile($el: cheerio.Cheerio<any>): boolean {
+  if ($el.find("pre, table, ul, ol").length) return false;
+  if ($el.find("p").length > 2) return false;
+  const text = textOf($el);
+  if (text.length < 8 || text.length > 220) return false;
+  if (isMetricTile(text)) return false;
+
+  const heading = $el
+    .find("h2, h3, h4, h5, h6")
+    .first()
+    .text()
+    .replace(/\s+/g, " ")
+    .trim();
+  const words = text.split(/\s+/).filter(Boolean).length;
+  const linked =
+    $el.is("a, [role='link']") ||
+    ($el.find("a").length === 1 && textOf($el.find("a").first()) === text);
+
+  if (heading && text.length - heading.length < 140 && (linked || hasCtaClass($el))) {
+    return words <= 32;
+  }
+  if (linked && words <= 16 && (heading || hasCtaClass($el) || CTA_LINE.test(text))) {
+    return true;
+  }
+  return hasCtaClass($el) && words <= 20 && !heading;
+}
+
+function removeCtaRegions($: cheerio.CheerioAPI): void {
+  $("a, [role='link'], div, section, article, li").each((_, node) => {
+    const $el = $(node);
+    if (!$el.parent().length) return;
+    if (isCtaTile($el)) $el.remove();
+  });
+
+  $("div, section, ul, ol").each((_, node) => {
+    const $el = $(node);
+    if (!$el.parent().length) return;
+    if ($el.find("pre, table").length) return;
+    const kids = $el.children().toArray();
+    if (kids.length < 3) return;
+    const tiles = kids.filter((child) => isCtaTile($(child)));
+    if (tiles.length >= 3 && tiles.length / kids.length >= 0.6) {
+      $el.remove();
+    }
+  });
+}
+
 function stripChrome($: cheerio.CheerioAPI, keepCode: boolean): void {
   unwrapInlineButtons($);
   flattenHeadings($);
@@ -1299,6 +1462,7 @@ function stripChrome($: cheerio.CheerioAPI, keepCode: boolean): void {
   stripBannerHeaders($);
   removeBoilerplateSections($);
   removeLinkFarms($);
+  removeCtaRegions($);
   if (keepCode) normalizePreBlocks($);
   collectCodeContainers($, keepCode);
   flattenLayoutTables($);
